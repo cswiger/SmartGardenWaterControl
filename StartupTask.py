@@ -16,12 +16,15 @@ import weather
 import _wingpio as gpio
 
 valve_pin = 5
+moisture_pin = 6
 gpio.setup(valve_pin, gpio.OUT, gpio.PUD_OFF, gpio.HIGH)
+gpio.setup(moisture_pin, gpio.IN, gpio.PUD_OFF)
 
 # Globals for state
 gPostVars = None
 
 # Initialize an empty schedule with 10 (0 thru 9) events
+# I *want* to save and read it from disk but cannot access it in Win10 IoT on RPi2
 schedule = {}
 for key in range(10):
   schedule[key] = {"timeofday":"XX:XX","dayofweek":"X","duration":"X"}
@@ -74,16 +77,23 @@ class RequestHandler(BaseHTTPRequestHandler):
     elif (self.path == '/stop'):         # the STOP button was pressed
       gWateringStatus = "Canceled"
       self.wfile.write("<HTML><HEAD><META http-equiv='refresh' content='1;URL=/'></HEAD><BODY><H1>Updating...</H1></BODY></HTML>".encode("utf-8"))
+    elif (self.path == '/start'):        # The Start button was pressed 
+      gWateringStatus = True
+      self.wfile.write("<HTML><HEAD><META http-equiv='refresh' content='1;URL=/'></HEAD><BODY><H1>Updating...</H1></BODY></HTML>".encode("utf-8"))
 
   def do_GET(self):
     global table, gWateringStatus
+    self.send_response(200)
+    self.send_header("Content-type", "text/html")
+    self.end_headers()
     self.wfile.write(bytes("<html><head><title>Garden Water Controller</title></head><body>", "utf-8"))
     # display the watering status and a STOP button if it is on
     if ((gWateringStatus==True) and (gWateringStatus != "Canceled")):
-       self.wfile.write(bytes("Watering: ON<BR>","utf-8"))
+       self.wfile.write(bytes("Watering: ON<BR><BR>","utf-8"))
        self.wfile.write(bytes("<FORM action='/stop' method='POST'><input type='submit' value='Stop'></FORM><BR><BR>","utf-8"))
     else:
        self.wfile.write(bytes("Watering: OFF<BR><BR>","utf-8"))
+       self.wfile.write(bytes("<FORM action='/start' method='POST'><input type='submit' value='Start'></FORM><BR><BR>","utf-8"))
     # print the current watering schedule
     self.wfile.write(bytes("Existing events<BR>","utf-8"))
     self.wfile.write(bytes(table,"utf-8"))
@@ -105,7 +115,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 
 # run the webserver in a background thread with access to global variables
-httpd = http.server.HTTPServer(("", 8800), RequestHandler)
+httpd = http.server.HTTPServer(("", 80), RequestHandler)
 httpd_thread = threading.Thread(target=httpd.serve_forever)
 httpd_thread.setDaemon(True)
 httpd_thread.start()
@@ -116,6 +126,16 @@ httpd_thread.start()
 def waterCycle(t):
     global gWateringStatus
     now = time.time()
+    # check soil moisture
+    if ( gpio.input(moisture_pin) == gpio.LOW ):
+        print("Soil above moisture threshhold, skip watering")
+        gWateringStatus = False
+        # wait a minute before return
+        then = time.time() + 60
+        while ( time.time() < then ):
+           updateSched()
+           sleep(1)
+        return
     print("watering, gpio on at " + str(now))
     gpio.output(valve_pin, gpio.LOW)
     # post ON time to Azure Queue
@@ -177,7 +197,7 @@ def updateSched():
         id = int(gPostVars[b'id'][0].decode("utf-8"))
         # prolly should sanitize these too but for now - if not in format no water!  As it is they are
         # free format strings and bytes that just happen to be interpreted as day of week with 0 = Monday
-	      # and time of day - if there is the ':' missing there it'll cause an error of not trapped
+	    # and time of day - if there is the ':' missing there it'll cause an error if not trapped
         tod = gPostVars[b'tod'][0].decode("utf-8")
         if ( tod.find(':') != -1 ):      # tod must have a colon ':' or it breaks the script
            dow = gPostVars[b'dow'][0].decode("utf-8")
@@ -192,9 +212,30 @@ def updateSched():
            table += "</TABLE><BR>"
         gPostVars = None
 
+def manual():
+    # the ON manual button was pressed
+    print("Manual override button pressed")
+    gpio.output(valve_pin, gpio.LOW)
+    # post ON time to Azure Queue
+    postdata = {'ON':''}
+    postdata['ON'] = time.time()
+    print(postazq.postazq(postdata))
+    while (gWateringStatus == True):
+      updateSched()
+      sleep(1)
+    gpio.output(valve_pin, gpio.HIGH)
+    # post OFF time to Azure Queue
+    postdata = {'OFF':''}
+    postdata['OFF'] = time.time()
+    print(postazq.postazq(postdata))
+
+
 def loop():
   global schedule,table,gPostVars
   while True:
+    # check if manual ON button was pressed
+    if (gWateringStatus == True):
+        manual()
     updateSched()
     s.enter(1,1,checkSched,())
     s.run()
