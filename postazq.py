@@ -18,7 +18,7 @@ def postazq(postdata):
    sharedAccessKey = b'/<your Azure key here>'
    sharedAccessKeyName = 'your Azure key name here'
 
-   environment = 'https://chucks.servicebus.Windows.net'
+   environment = 'https://yourname.servicebus.Windows.net'
    sessionUrl = urljoin(environment,'/yourname/messages')
 
    data = json.dumps(postdata).encode('utf-8')
