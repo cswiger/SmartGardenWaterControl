@@ -8,7 +8,7 @@ import sas
 
 sbNamespace = 'nameSpace'
 sbEntityPath = 'EntityPath'
-sharedAccessKey = b'/<your Azure key here>'
+sharedAccessKey = b'<your Azure key here>'
 sharedAccessKeyName = 'your Azure key name here'
 
 environment = 'https://yourname.servicebus.Windows.net'
